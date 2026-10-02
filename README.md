@@ -1,81 +1,81 @@
-# 🚢 Titanic Agent — Agente de datos con LangGraph + LangChain
+# 🚢 Titanic Agent — Data agent with LangGraph + LangChain
 
-Un **agente de IA** que responde preguntas en lenguaje natural sobre el dataset del Titanic.
-No inventa cifras: el modelo (Gemini) **decide qué herramientas de pandas usar**, las ejecuta,
-lee los resultados y razona hasta llegar a una respuesta.
+An **AI agent** that answers natural-language questions about the Titanic dataset.
+It doesn't make up figures: the model (Gemini) **decides which pandas tools to use**, runs them,
+reads the results and reasons until it reaches an answer.
 
 ```text
-Pregunta:  "¿Cuál fue la tasa de supervivencia de las mujeres?"
-Agente:    schema() → survival_rate(group_by=["sex"])
-Respuesta: "La tasa de supervivencia de las mujeres fue del 74.2 %."
+Question: "What was the survival rate of women?"
+Agent:    schema() → survival_rate(group_by=["sex"])
+Answer:   "The survival rate of women was 74.2%."
 ```
 
-El proyecto cubre el ciclo completo: **agente → API REST → contenedor Docker → despliegue automático
-en Google Cloud Run → evaluación de precisión**.
+The project covers the full cycle: **agent → REST API → Docker container → automatic deployment
+to Google Cloud Run → accuracy evaluation**.
 
 ---
 
-## 📑 Índice
+## 📑 Table of contents
 
-1. [¿Qué es un agente?](#-qué-es-un-agente)
-2. [LangChain vs. LangGraph: ¿quién hace qué?](#-langchain-vs-langgraph-quién-hace-qué)
-3. [Arquitectura](#-arquitectura)
-4. [Estructura del proyecto](#-estructura-del-proyecto)
-5. [Cómo funciona el código, paso a paso](#-cómo-funciona-el-código-paso-a-paso)
-6. [Ejecutarlo en local](#-ejecutarlo-en-local)
-7. [Usar la API](#-usar-la-api)
-8. [Despliegue (CI/CD)](#-despliegue-cicd)
-9. [Evaluación del agente](#-evaluación-del-agente)
-10. [Cómo extenderlo](#-cómo-extenderlo)
+1. [What is an agent?](#-what-is-an-agent)
+2. [LangChain vs. LangGraph: who does what?](#-langchain-vs-langgraph-who-does-what)
+3. [Architecture](#️-architecture)
+4. [Project structure](#-project-structure)
+5. [How the code works, step by step](#-how-the-code-works-step-by-step)
+6. [Running it locally](#-running-it-locally)
+7. [Using the API](#-using-the-api)
+8. [Deployment (CI/CD)](#-deployment-cicd)
+9. [Evaluating the agent](#-evaluating-the-agent)
+10. [How to extend it](#️-how-to-extend-it)
 
 ---
 
-## 🤖 ¿Qué es un agente?
+## 🤖 What is an agent?
 
-Un LLM por sí solo **solo genera texto**: si le preguntas cuántos pasajeros sobrevivieron,
-puede "recordar" un número… o inventarlo.
+An LLM on its own **only generates text**: if you ask it how many passengers survived,
+it might "remember" a number… or make one up.
 
-Un **agente** es un LLM al que se le da:
+An **agent** is an LLM that is given:
 
-1. **Herramientas** (funciones de Python) que puede pedir ejecutar.
-2. **Un bucle** que le devuelve el resultado de esas herramientas para que siga razonando.
+1. **Tools** (Python functions) it can ask to run.
+2. **A loop** that feeds the results of those tools back so it can keep reasoning.
 
-Este patrón se conoce como **ReAct** (*Reason + Act*):
+This pattern is known as **ReAct** (*Reason + Act*):
 
 ```text
- ┌──────────────┐   "necesito datos"    ┌──────────────┐
- │   Razonar    │ ────────────────────▶ │    Actuar    │
- │  (el LLM)    │                       │ (herramienta)│
+ ┌──────────────┐    "I need data"      ┌──────────────┐
+ │    Reason    │ ────────────────────▶ │     Act      │
+ │  (the LLM)   │                       │    (tool)    │
  └──────────────┘ ◀──────────────────── └──────────────┘
-        │            "aquí está el resultado"
+        │              "here's the result"
         ▼
-   Respuesta final (cuando ya tiene lo que necesita)
+   Final answer (once it has what it needs)
 ```
 
 ---
 
-## 🧩 LangChain vs. LangGraph: ¿quién hace qué?
+## 🧩 LangChain vs. LangGraph: who does what?
 
-| Librería      | Rol en este proyecto                                                                 | Dónde verlo                         |
+| Library       | Role in this project                                                                 | Where to see it                     |
 |---------------|--------------------------------------------------------------------------------------|-------------------------------------|
-| **LangChain** | Conecta con el modelo (`init_chat_model`) y convierte funciones Python en herramientas (`@tool`). | `agent.py` — secciones 2 y final     |
-| **LangGraph** | Orquesta el **flujo**: define nodos, aristas y el bucle agente ↔ herramientas como un grafo con estado. | `agent.py` — sección 3 (`build_graph`) |
+| **LangChain** | Connects to the model (`init_chat_model`) and turns Python functions into tools (`@tool`). | `agent.py` — section 2 and the end  |
+| **LangGraph** | Orchestrates the **flow**: defines nodes, edges and the agent ↔ tools loop as a stateful graph. | `agent.py` — section 3 (`build_graph`) |
 
-> 💡 **Analogía:** LangChain te da las *piezas* (el cerebro y las manos); LangGraph es el
-> *diagrama de flujo* que dice en qué orden se usan y cuándo terminar.
+> 💡 **Analogy:** LangChain gives you the *pieces* (the brain and the hands); LangGraph is the
+> *flowchart* that says in what order they're used and when to stop.
 
 ---
 
-## 🏗️ Arquitectura
+## 🏗️ Architecture
 
-### Vista general del sistema
+### System overview
 
 ```mermaid
 flowchart LR
-    U[👤 Cliente<br/>curl / notebook] -->|POST /  JSON| API[Flask + Gunicorn<br/>main.py]
-    API -->|ask&#40;question&#41;| G[Grafo LangGraph<br/>agent.py]
-    G <-->|bind_tools| LLM[(Gemini<br/>vía LangChain)]
-    G <--> T[Herramientas pandas]
+    U[👤 Client<br/>curl / notebook] -->|POST /  JSON| API[Flask + Gunicorn<br/>main.py]
+    API -->|ask&#40;question&#41;| G[LangGraph graph<br/>agent.py]
+    G <-->|bind_tools| LLM[(Gemini<br/>via LangChain)]
+    G <--> T[pandas tools]
     T --> D[(titanic.csv)]
     subgraph Cloud Run
       API
@@ -85,97 +85,97 @@ flowchart LR
     end
 ```
 
-### El grafo del agente (LangGraph)
+### The agent graph (LangGraph)
 
 ```mermaid
 flowchart TD
-    S((START)) --> A[agent<br/>LLM decide]
-    A -->|¿pidió herramientas?<br/>sí| T[tools<br/>ToolNode ejecuta]
+    S((START)) --> A[agent<br/>LLM decides]
+    A -->|did it request tools?<br/>yes| T[tools<br/>ToolNode runs them]
     T --> A
     A -->|no| E((END))
 ```
 
-- **`agent`**: llama al LLM con el historial de mensajes. El LLM responde con texto *o* con una
-  petición de herramienta (`tool_call`).
-- **`tools_condition`**: arista condicional — si hay `tool_calls` va a `tools`; si no, termina.
-- **`tools`**: `ToolNode` ejecuta las herramientas pedidas y añade los resultados al historial.
-- El **estado** (`MessagesState`) es simplemente la lista de mensajes, que va creciendo en cada vuelta.
+- **`agent`**: calls the LLM with the message history. The LLM replies with text *or* with a
+  tool request (`tool_call`).
+- **`tools_condition`**: conditional edge — if there are `tool_calls` it goes to `tools`; otherwise it ends.
+- **`tools`**: `ToolNode` runs the requested tools and appends the results to the history.
+- The **state** (`MessagesState`) is simply the list of messages, which grows on every turn.
 
 ---
 
-## 📁 Estructura del proyecto
+## 📁 Project structure
 
 ```text
 Langraph_Langchain_Agent/
 ├── .github/workflows/
-│   └── deploy.yml        # CI/CD: build de la imagen + deploy en Cloud Run en cada push a main
+│   └── deploy.yml        # CI/CD: build the image + deploy to Cloud Run on every push to main
 ├── ai_system/
-│   ├── agent.py          # 🧠 El agente: dataset, herramientas y grafo LangGraph
-│   ├── main.py           # 🌐 API Flask (POST / y GET /health)
-│   ├── requirements.txt  # Dependencias fijadas
-│   ├── Dockerfile        # Imagen Python 3.12 + Gunicorn
+│   ├── agent.py          # 🧠 The agent: dataset, tools and LangGraph graph
+│   ├── main.py           # 🌐 Flask API (POST / and GET /health)
+│   ├── requirements.txt  # Pinned dependencies
+│   ├── Dockerfile        # Python 3.12 + Gunicorn image
 │   └── .dockerignore
-└── Prediction.ipynb      # 📊 Notebook para probar y evaluar el agente desplegado
+└── Prediction.ipynb      # 📊 Notebook to test and evaluate the deployed agent
 ```
 
 ---
 
-## 🔍 Cómo funciona el código, paso a paso
+## 🔍 How the code works, step by step
 
-Todo el agente vive en [`ai_system/agent.py`](ai_system/agent.py), dividido en 4 secciones.
+The whole agent lives in [`ai_system/agent.py`](ai_system/agent.py), split into 4 sections.
 
 ### 1. Dataset
 
 ```python
-df = pd.read_csv(DATASET_URL)  # 891 pasajeros, se carga una sola vez al arrancar
+df = pd.read_csv(DATASET_URL)  # 891 passengers, loaded only once at startup
 ```
 
-Por defecto usa el CSV de seaborn; puede cambiarse con la variable de entorno `DATASET_URL`.
+By default it uses the seaborn CSV; it can be changed with the `DATASET_URL` environment variable.
 
-### 2. Herramientas (LangChain `@tool`)
+### 2. Tools (LangChain `@tool`)
 
-El decorador `@tool` convierte una función en algo que el LLM puede "ver" y pedir.
-**El docstring es crucial**: es lo que el modelo lee para decidir cuándo y cómo usarla.
+The `@tool` decorator turns a function into something the LLM can "see" and request.
+**The docstring is crucial**: it's what the model reads to decide when and how to use it.
 
-| Herramienta           | Qué hace                                                        | Ejemplo de llamada                               |
+| Tool                  | What it does                                                    | Example call                                     |
 |-----------------------|-----------------------------------------------------------------|--------------------------------------------------|
-| `schema()`            | Columnas, tipos, nulos y 3 filas de muestra                     | `schema()`                                       |
-| `statistics(column)`  | `describe()` si es numérica; frecuencias si es categórica       | `statistics(column="age")`                       |
-| `survival_rate(group_by)` | Tasa de supervivencia y nº de pasajeros por grupos         | `survival_rate(group_by=["sex", "class"])`       |
-| `filter_passengers(condition)` | Filtra con `df.query()` y devuelve conteo, tasa y muestra | `filter_passengers(condition="age < 18 and pclass == 3")` |
+| `schema()`            | Columns, types, nulls and 3 sample rows                         | `schema()`                                       |
+| `statistics(column)`  | `describe()` if numeric; frequencies if categorical             | `statistics(column="age")`                       |
+| `survival_rate(group_by)` | Survival rate and passenger count by group                  | `survival_rate(group_by=["sex", "class"])`       |
+| `filter_passengers(condition)` | Filters with `df.query()` and returns count, rate and a sample | `filter_passengers(condition="age < 18 and pclass == 3")` |
 
-> 🛡️ **Errores como retroalimentación:** si el modelo pide una columna inexistente o escribe mal
-> una condición, la herramienta **no lanza una excepción**: devuelve el error como texto.
-> Así el LLM lo lee y se corrige en la siguiente vuelta.
+> 🛡️ **Errors as feedback:** if the model asks for a column that doesn't exist or writes a
+> malformed condition, the tool **doesn't raise an exception**: it returns the error as text.
+> That way the LLM reads it and corrects itself on the next turn.
 
-Además, un **prompt de sistema** fija el comportamiento: *"eres un analista de datos, usa las
-herramientas, nunca inventes cifras, consulta el esquema si no conoces las columnas"*.
+In addition, a **system prompt** sets the behavior: *"you are a data analyst, use the
+tools, never make up figures, check the schema if you don't know the columns"*.
 
-### 3. El grafo (LangGraph)
+### 3. The graph (LangGraph)
 
 ```python
 graph = StateGraph(MessagesState)
-graph.add_node("agent", agent)              # nodo que llama al LLM
-graph.add_node("tools", ToolNode(TOOLS))    # nodo que ejecuta herramientas
+graph.add_node("agent", agent)              # node that calls the LLM
+graph.add_node("tools", ToolNode(TOOLS))    # node that runs tools
 
 graph.add_edge(START, "agent")
-graph.add_conditional_edges("agent", tools_condition)  # ¿tools o END?
-graph.add_edge("tools", "agent")            # tras ejecutar, vuelve a razonar
+graph.add_conditional_edges("agent", tools_condition)  # tools or END?
+graph.add_edge("tools", "agent")            # after running, go back to reasoning
 ```
 
-Se compila **sin checkpointer**: cada petición a la API es una conversación nueva e independiente
-(sin memoria entre preguntas).
+It's compiled **without a checkpointer**: each API request is a new, independent conversation
+(no memory between questions).
 
-### 4. Punto de entrada: `ask()`
+### 4. Entry point: `ask()`
 
 ```python
 state = app.invoke({"messages": [HumanMessage(question)]}, {"recursion_limit": 25})
 ```
 
-- `recursion_limit=25` evita bucles infinitos si el modelo nunca deja de pedir herramientas.
-- Devuelve la respuesta final **y** la lista de herramientas usadas, útil para depurar y auditar.
+- `recursion_limit=25` prevents infinite loops if the model never stops requesting tools.
+- It returns the final answer **and** the list of tools used, which is useful for debugging and auditing.
 
-### Ejemplo de traza real
+### Real trace example
 
 ```text
 👤 HumanMessage:  "How many passengers survived?"
@@ -183,59 +183,59 @@ state = app.invoke({"messages": [HumanMessage(question)]}, {"recursion_limit": 2
 🔧 ToolMessage:   "Rows: 891 ... survived int64 ..."
 🤖 AIMessage:     tool_calls=[filter_passengers(condition="survived == 1")]
 🔧 ToolMessage:   "Passengers: 342 ..."
-🤖 AIMessage:     "A total of 342 passengers survived."   ← sin tool_calls → END
+🤖 AIMessage:     "A total of 342 passengers survived."   ← no tool_calls → END
 ```
 
 ---
 
-## 💻 Ejecutarlo en local
+## 💻 Running it locally
 
-### Requisitos
+### Requirements
 
 - Python 3.12
-- Una API key de Gemini ([Google AI Studio](https://aistudio.google.com/apikey))
+- A Gemini API key ([Google AI Studio](https://aistudio.google.com/apikey))
 
-### Opción A — Python
+### Option A — Python
 
 ```bash
 cd ai_system
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-export GEMINI_API_KEY="tu-api-key"
-# opcional: export MODEL="google_genai:gemini-3.5-flash"
+export GEMINI_API_KEY="your-api-key"
+# optional: export MODEL="google_genai:gemini-3.5-flash"
 
 gunicorn --bind :8080 --workers 1 --threads 8 main:app
 ```
 
-### Opción B — Docker
+### Option B — Docker
 
 ```bash
 docker build -t titanic-agent ai_system/
-docker run -p 8080:8080 -e GEMINI_API_KEY="tu-api-key" titanic-agent
+docker run -p 8080:8080 -e GEMINI_API_KEY="your-api-key" titanic-agent
 ```
 
-### Probar el agente directamente en Python (sin API)
+### Trying the agent directly in Python (no API)
 
 ```python
 from agent import ask
 ask("What was the survival rate of first class passengers?")
 ```
 
-### Variables de entorno
+### Environment variables
 
-| Variable         | Obligatoria | Por defecto                          | Descripción                         |
-|------------------|:-----------:|--------------------------------------|-------------------------------------|
-| `GEMINI_API_KEY` | ✅          | —                                    | Clave del proveedor del modelo      |
-| `MODEL`          | ❌          | `google_genai:gemini-3.5-flash`      | Modelo en formato `proveedor:modelo` |
-| `DATASET_URL`    | ❌          | CSV del Titanic de seaborn           | Origen del dataset                  |
-| `PORT`           | ❌          | `8080`                               | Puerto del servidor                 |
+| Variable         | Required | Default                              | Description                         |
+|------------------|:--------:|--------------------------------------|-------------------------------------|
+| `GEMINI_API_KEY` | ✅       | —                                    | Model provider key                  |
+| `MODEL`          | ❌       | `google_genai:gemini-3.5-flash`      | Model in `provider:model` format    |
+| `DATASET_URL`    | ❌       | seaborn's Titanic CSV                | Dataset source                      |
+| `PORT`           | ❌       | `8080`                               | Server port                         |
 
 ---
 
-## 🌐 Usar la API
+## 🌐 Using the API
 
-### `POST /` — Hacer una pregunta
+### `POST /` — Ask a question
 
 ```bash
 curl -X POST http://localhost:8080/ \
@@ -243,7 +243,7 @@ curl -X POST http://localhost:8080/ \
   -d '{"question": "How many passengers survived?"}'
 ```
 
-**Respuesta `200`:**
+**`200` response:**
 
 ```json
 {
@@ -255,12 +255,12 @@ curl -X POST http://localhost:8080/ \
 }
 ```
 
-**Errores:**
+**Errors:**
 
-| Código | Cuándo                                                              |
-|:------:|---------------------------------------------------------------------|
-| `400`  | El body no es JSON o falta `question`                               |
-| `502`  | Falló el proveedor del modelo o el agente superó el límite de pasos |
+| Code  | When                                                                 |
+|:-----:|----------------------------------------------------------------------|
+| `400` | The body isn't JSON or `question` is missing                         |
+| `502` | The model provider failed or the agent exceeded its step limit       |
 
 ### `GET /health` — Health check
 
@@ -270,9 +270,9 @@ curl http://localhost:8080/health   # {"status": "ok"}
 
 ---
 
-## 🚀 Despliegue (CI/CD)
+## 🚀 Deployment (CI/CD)
 
-Cada `push` a `main` dispara [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
+Every `push` to `main` triggers [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
 
 ```mermaid
 flowchart LR
@@ -282,49 +282,49 @@ flowchart LR
     AR --> CR[Cloud Run<br/>titanic-agent]
 ```
 
-1. Autentica en Google Cloud con el secreto `GCP_SA_KEY`.
-2. Construye la imagen y la sube a **Artifact Registry** con el tag del commit y `latest`.
-3. Despliega en **Cloud Run** (`us-central1`, 1 GiB de RAM, timeout 900 s, acceso público),
-   inyectando `GEMINI_API_KEY` y `MODEL` como variables de entorno.
+1. Authenticates to Google Cloud with the `GCP_SA_KEY` secret.
+2. Builds the image and pushes it to **Artifact Registry** tagged with the commit SHA and `latest`.
+3. Deploys to **Cloud Run** (`us-central1`, 1 GiB RAM, 900 s timeout, public access),
+   injecting `GEMINI_API_KEY` and `MODEL` as environment variables.
 
-**Secretos necesarios en GitHub** (*Settings → Secrets and variables → Actions*):
+**Required GitHub secrets** (*Settings → Secrets and variables → Actions*):
 
-| Secreto          | Contenido                                                      |
+| Secret           | Contents                                                       |
 |------------------|----------------------------------------------------------------|
-| `GCP_SA_KEY`     | JSON de una service account con permisos de Artifact Registry y Cloud Run |
-| `GEMINI_API_KEY` | API key de Gemini                                              |
+| `GCP_SA_KEY`     | JSON key of a service account with Artifact Registry and Cloud Run permissions |
+| `GEMINI_API_KEY` | Gemini API key                                                 |
 
-> ⚙️ **¿Por qué 1 worker y 8 threads?** El dataset y el modelo se cargan una sola vez por proceso.
-> Con un único worker se ahorra memoria, y los threads permiten atender varias peticiones a la vez
-> (la mayor parte del tiempo se pasa esperando la respuesta del LLM, que es I/O).
+> ⚙️ **Why 1 worker and 8 threads?** The dataset and the model are loaded once per process.
+> A single worker saves memory, and the threads let it serve several requests at once
+> (most of the time is spent waiting for the LLM's response, which is I/O).
 
 ---
 
-## 📊 Evaluación del agente
+## 📊 Evaluating the agent
 
-[`Prediction.ipynb`](Prediction.ipynb) consulta el agente desplegado y mide su calidad:
+[`Prediction.ipynb`](Prediction.ipynb) queries the deployed agent and measures its quality:
 
-1. Define un **test set** de preguntas cuya respuesta correcta se calcula directamente con pandas
+1. Defines a **test set** of questions whose correct answer is computed directly with pandas
    (*ground truth*).
-2. Envía cada pregunta a la API y extrae los números de la respuesta.
-3. Marca como correcta la respuesta si algún número está dentro de un **1 %** del valor esperado.
+2. Sends each question to the API and extracts the numbers from the answer.
+3. Marks the answer as correct if any number is within **1%** of the expected value.
 
-**Resultados obtenidos** (11 preguntas, Gemini 3.5 Flash):
+**Results** (11 questions, Gemini 3.5 Flash):
 
-| Métrica                 | Valor          |
+| Metric                  | Value          |
 |-------------------------|----------------|
-| Precisión               | **100 % (11/11)** |
-| Latencia media          | 4.13 s         |
-| Llamadas a herramientas | 3.09 de media por pregunta |
+| Accuracy                | **100% (11/11)** |
+| Average latency         | 4.13 s         |
+| Tool calls              | 3.09 on average per question |
 
-> 🧪 Evaluar un agente con *ground truth* calculado de forma determinista es una buena práctica:
-> te permite cambiar de modelo, de prompt o de herramientas y comprobar objetivamente si mejora o empeora.
+> 🧪 Evaluating an agent against deterministically computed ground truth is good practice:
+> it lets you change the model, prompt or tools and objectively check whether things get better or worse.
 
 ---
 
-## 🛠️ Cómo extenderlo
+## 🛠️ How to extend it
 
-### Añadir una herramienta nueva
+### Adding a new tool
 
 ```python
 @tool
@@ -335,11 +335,11 @@ def correlation(col_a: str, col_b: str) -> str:
 TOOLS = [schema, statistics, survival_rate, filter_passengers, correlation]
 ```
 
-No hace falta tocar el grafo: `bind_tools` y `ToolNode` la recogen automáticamente.
+No need to touch the graph: `bind_tools` and `ToolNode` pick it up automatically.
 
-### Cambiar de modelo / proveedor
+### Switching model / provider
 
-Gracias a `init_chat_model`, basta con instalar el paquete del proveedor y cambiar `MODEL`:
+Thanks to `init_chat_model`, you just install the provider's package and change `MODEL`:
 
 ```bash
 pip install langchain-openai
@@ -347,29 +347,29 @@ export MODEL="openai:gpt-4o-mini"
 export OPENAI_API_KEY="..."
 ```
 
-### Añadir memoria de conversación
+### Adding conversation memory
 
-Compila el grafo con un *checkpointer* y pasa un `thread_id` en cada llamada:
+Compile the graph with a *checkpointer* and pass a `thread_id` on each call:
 
 ```python
 from langgraph.checkpoint.memory import InMemorySaver
 app = graph.compile(checkpointer=InMemorySaver())
-app.invoke({"messages": [...]}, {"configurable": {"thread_id": "usuario-123"}})
+app.invoke({"messages": [...]}, {"configurable": {"thread_id": "user-123"}})
 ```
 
-> ⚠️ En Cloud Run las instancias son efímeras: para memoria persistente usa un checkpointer
-> con base de datos (p. ej. Postgres) en lugar de `InMemorySaver`.
+> ⚠️ Cloud Run instances are ephemeral: for persistent memory, use a database-backed checkpointer
+> (e.g. Postgres) instead of `InMemorySaver`.
 
-### Usar otro dataset
+### Using another dataset
 
-Apunta `DATASET_URL` a otro CSV y adapta las herramientas y el prompt de sistema
-(por ejemplo, `survival_rate` depende de la columna `survived`).
+Point `DATASET_URL` to another CSV and adapt the tools and the system prompt
+(for example, `survival_rate` depends on the `survived` column).
 
 ---
 
-## 📚 Recursos
+## 📚 Resources
 
-- [Documentación de LangGraph](https://langchain-ai.github.io/langgraph/)
-- [Documentación de LangChain](https://python.langchain.com/)
-- [Paper ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629)
+- [LangGraph documentation](https://langchain-ai.github.io/langgraph/)
+- [LangChain documentation](https://python.langchain.com/)
+- [ReAct paper: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629)
 - [Google Cloud Run](https://cloud.google.com/run/docs)
