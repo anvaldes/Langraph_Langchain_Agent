@@ -73,7 +73,7 @@ This pattern is known as **ReAct** (*Reason + Act*):
 ```mermaid
 flowchart LR
     U[👤 Client<br/>curl / notebook] -->|POST /  JSON| API[Flask + Gunicorn<br/>main.py]
-    API -->|ask&#40;question&#41;| G[LangGraph graph<br/>agent.py]
+    API -->|"ask(question)"| G[LangGraph graph<br/>agent.py]
     G <-->|bind_tools| LLM[(Gemini<br/>via LangChain)]
     G <--> T[pandas tools]
     T --> D[(titanic.csv)]
