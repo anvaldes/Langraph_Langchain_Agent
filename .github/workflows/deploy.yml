@@ -1,0 +1,82 @@
+name: Deploy AI System (Langraph + Langchain) [PROD]
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ai-system-prod-${{ github.ref }}
+  cancel-in-progress: true
+
+# --------------------------------------------------
+# DEPLOY PARAMETERS
+# --------------------------------------------------
+env:
+  PROJECT_ID: iaportafolio-510415
+  REGION: us-central1
+  SERVICE_NAME: titanic-agent
+  AR_REPOSITORY: titanic-agent
+  CLOUD_RUN_SA: proyects-account@iaportafolio-510415.iam.gserviceaccount.com
+  MODEL: google_genai:gemini-3.5-flash
+
+jobs:
+  deploy:
+    name: Build & Push image + Deploy Cloud Run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker auth for Artifact Registry
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # --------------------------------------------------
+      # BUILD & PUSH (AI System Image)
+      # --------------------------------------------------
+      - name: Build & Push AI System image
+        run: |
+          set -euo pipefail
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${SERVICE_NAME}"
+          docker buildx build \
+            --platform linux/amd64 \
+            -f ai_system/Dockerfile \
+            ai_system/ \
+            -t "${IMAGE}:${{ github.sha }}" \
+            -t "${IMAGE}:latest" \
+            --push
+
+      # --------------------------------------------------
+      # DEPLOY (AI System Service)
+      # --------------------------------------------------
+      - name: Deploy AI System Cloud Run
+        env:
+          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+        run: |
+          set -euo pipefail
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${SERVICE_NAME}"
+          gcloud run deploy "${SERVICE_NAME}" \
+            --image="${IMAGE}:${{ github.sha }}" \
+            --platform=managed \
+            --region="${REGION}" \
+            --project="${PROJECT_ID}" \
+            --service-account="${CLOUD_RUN_SA}" \
+            --update-env-vars="GEMINI_API_KEY=${GEMINI_API_KEY},MODEL=${MODEL}" \
+            --memory=1Gi \
+            --timeout=900 \
+            --ingress=all \
+            --allow-unauthenticated
